@@ -1,0 +1,8 @@
+/Users/placombgbmac/git/NLog.Targets.Gelf/NLog.Target.Gelf/obj/Debug/.NETFramework,Version=v4.5.AssemblyAttribute.cs
+/Users/placombgbmac/git/NLog.Targets.Gelf/NLog.Target.Gelf/bin/Debug/NLog.Targets.Gelf.dll.mdb
+/Users/placombgbmac/git/NLog.Targets.Gelf/NLog.Target.Gelf/bin/Debug/NLog.Targets.Gelf.dll
+/Users/placombgbmac/git/NLog.Targets.Gelf/NLog.Target.Gelf/obj/Debug/NLog.Targets.Gelf.dll
+/Users/placombgbmac/git/NLog.Targets.Gelf/NLog.Target.Gelf/obj/Debug/NLog.Targets.Gelf.dll.mdb
+/Users/placombgbmac/git/NLog.Targets.Gelf/NLog.Target.Gelf/bin/Debug/Gelf.dll
+/Users/placombgbmac/git/NLog.Targets.Gelf/NLog.Target.Gelf/bin/Debug/Newtonsoft.Json.dll
+/Users/placombgbmac/git/NLog.Targets.Gelf/NLog.Target.Gelf/bin/Debug/NLog.dll

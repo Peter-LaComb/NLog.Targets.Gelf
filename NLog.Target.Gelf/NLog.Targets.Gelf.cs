@@ -1,13 +1,13 @@
 ﻿using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
 using System.Net;
-using System.Net.Sockets;
 using System.Text;
-using Newtonsoft.Json;
+
+using Gelf;
+
 using NLog.Config;
 
 namespace NLog.Targets.Gelf
@@ -17,12 +17,8 @@ namespace NLog.Targets.Gelf
     {
         #region Private Members
 
-        private static readonly Socket SocketClient = new Socket(SocketType.Dgram, ProtocolType.Udp);
-        private static readonly ConcurrentDictionary<string, IPEndPoint> EndPoints = new ConcurrentDictionary<string, IPEndPoint>();
-
-        private const int ShortMessageLength = 250;
-        private const int MaxMessageIdSize = 8;
-        private const int MaxNumberOfChunksAllowed = 128;
+        const int ShortMessageLength = 250;
+        const int MaxMessageIdSize = 8;
 
         #endregion
 
@@ -33,7 +29,6 @@ namespace NLog.Targets.Gelf
 
         public int Port { get; set; }
         public string Facility { get; set; }
-        public int MaxChunkSize { get; set; }
 
         #endregion
 
@@ -44,7 +39,6 @@ namespace NLog.Targets.Gelf
             GelfServer = "127.0.0.1";
             Port = 12201;
             Facility = null;
-            MaxChunkSize = 1024;
         }
 
         #endregion
@@ -72,46 +66,10 @@ namespace NLog.Targets.Gelf
 
         #region Private Methods
 
-        private void SendMessage(string gelfServer, int serverPort, string message)
+        private void SendMessage(string gelfServer, int serverPort, GelfMessage message)
         {
-            var endPoint = GetIPEndPoint(gelfServer, serverPort);
-
-            var gzipMessage = GzipMessage(message);
-            if (gzipMessage.Length > MaxChunkSize)
-            {
-                var chunkCount = (gzipMessage.Length / MaxChunkSize) + 1;
-                if (chunkCount > MaxNumberOfChunksAllowed)
-                    return;
-
-                var messageId = GenerateMessageId();
-                for (var i = 0; i < chunkCount; i++)
-                {
-                    var messageChunkPrefix = CreateChunkedMessagePart(messageId, i, chunkCount);
-                    var skip = i * MaxChunkSize;
-                    var messageChunkSuffix = gzipMessage.Skip(skip).Take(MaxChunkSize).ToArray();
-
-                    var messageChunkFull = new byte[messageChunkPrefix.Length + messageChunkSuffix.Length];
-                    messageChunkPrefix.CopyTo(messageChunkFull, 0);
-                    messageChunkSuffix.CopyTo(messageChunkFull, messageChunkPrefix.Length);
-
-                    SocketClient.SendTo(messageChunkFull, 0, messageChunkFull.Length, SocketFlags.None, endPoint);
-                }
-            }
-            else
-            {
-                SocketClient.SendTo(gzipMessage, 0, gzipMessage.Length, SocketFlags.None, endPoint);
-            }
-        }
-
-        private static IPEndPoint GetIPEndPoint(string gelfServer, int serverPort)
-        {
-            return EndPoints.GetOrAdd(gelfServer,
-                                      s =>
-                                          {
-                                              var hostAddress = Dns.GetHostAddresses(gelfServer).FirstOrDefault();
-
-                                              return hostAddress == null ? null : new IPEndPoint(hostAddress, serverPort);
-                                          });
+            var publisher = new GelfPublisher(gelfServer, serverPort);
+            publisher.Publish(message);
         }
 
         private static byte[] GzipMessage(string message)
@@ -131,7 +89,7 @@ namespace NLog.Targets.Gelf
             return compressed;
         }
 
-        private string CreateGelfJsonFromLoggingEvent(LogEventInfo logEventInfo)
+        private GelfMessage CreateGelfJsonFromLoggingEvent(LogEventInfo logEventInfo)
         {
             var shortMessage = logEventInfo.FormattedMessage.Length > ShortMessageLength ? logEventInfo.FormattedMessage.Substring(0, ShortMessageLength - 1) : logEventInfo.FormattedMessage;
 
@@ -141,36 +99,32 @@ namespace NLog.Targets.Gelf
                     FullMessage = logEventInfo.FormattedMessage,
                     Host = Dns.GetHostName(),
                     Level = logEventInfo.Level.GelfSeverity(),
-                    ShortMessage = shortMessage,
-                    Logger = logEventInfo.LoggerName ?? ""
+                    ShortMessage = shortMessage
                 };
+
+            if (!string.IsNullOrWhiteSpace(logEventInfo.LoggerName)) gelfMessage.Add("Logger", logEventInfo.LoggerName);
 
             if (logEventInfo.Properties != null)
             {
                 object notes;
                 if (logEventInfo.Properties.TryGetValue("Notes", out notes))
                 {
-                    gelfMessage.Notes = (string) notes;
+                    gelfMessage.Add("Notes", notes);
                 }
             }
 
-            if (logEventInfo.Exception == null) return JsonConvert.SerializeObject(gelfMessage);
+            if (logEventInfo.Exception == null) return gelfMessage;
 
             var exceptioToLog = logEventInfo.Exception;
 
-            while (exceptioToLog.InnerException != null)
-            {
-                exceptioToLog = exceptioToLog.InnerException;
-            }
+            gelfMessage.Add("ExceptionType", exceptioToLog.GetType().Name);
+            gelfMessage.Add("ExceptionMessage", exceptioToLog.Message);
+            gelfMessage.Add("Exception", exceptioToLog.ToString());
 
-            gelfMessage.ExceptionType = exceptioToLog.GetType().Name;
-            gelfMessage.ExceptionMessage = exceptioToLog.Message;
-            gelfMessage.StackTrace = exceptioToLog.StackTrace;
-
-            return JsonConvert.SerializeObject(gelfMessage);
+            return gelfMessage;
         }
 
-        private string CreateFatalGelfJson(Exception exception)
+        private GelfMessage CreateFatalGelfJson(Exception exception)
         {
             var gelfMessage = new GelfMessage
                 {
@@ -181,20 +135,15 @@ namespace NLog.Targets.Gelf
                     ShortMessage = "Error sending message in NLog.Targets.Gelf"
                 };
 
-            if (exception == null) return JsonConvert.SerializeObject(gelfMessage);
+            if (exception == null) return gelfMessage;
 
             var exceptioToLog = exception;
 
-            while (exceptioToLog.InnerException != null)
-            {
-                exceptioToLog = exceptioToLog.InnerException;
-            }
+            gelfMessage.Add("ExceptionType", exceptioToLog.GetType().Name);
+            gelfMessage.Add("ExceptionMessage", exceptioToLog.Message);
+            gelfMessage.Add("Exception", exceptioToLog.ToString());
 
-            gelfMessage.ExceptionType = exceptioToLog.GetType().Name;
-            gelfMessage.ExceptionMessage = exceptioToLog.Message;
-            gelfMessage.StackTrace = exceptioToLog.StackTrace;
-
-            return JsonConvert.SerializeObject(gelfMessage);
+            return gelfMessage;
         }
 
         private static byte[] CreateChunkedMessagePart(string messageId, int chunkNumber, int chunkCount)
